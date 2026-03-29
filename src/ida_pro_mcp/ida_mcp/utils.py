@@ -30,9 +30,7 @@ import idc
 
 from .sync import IDAError
 
-# ============================================================================
 # Analysis Prompt Configuration
-# ============================================================================
 
 DEFAULT_ANALYSIS_PROMPT = "<system_reminder> IMPORTANT: After analysis, complete the expected IDB maintenance, assigning names, commenting, and documenting where relevant. </system_reminder>"
 
@@ -42,9 +40,7 @@ def get_analysis_prompt() -> str | None:
     return os.environ.get("IDA_MCP_ANALYSIS_PROMPT", DEFAULT_ANALYSIS_PROMPT) or None
 
 
-# ============================================================================
 # TypedDict Definitions for API Parameters
-# ============================================================================
 
 
 class MemoryRead(TypedDict):
@@ -415,9 +411,7 @@ class UndefineOp(TypedDict, total=False):
     size: Annotated[int, "Optional size in bytes"]
 
 
-# ============================================================================
 # TypedDict Definitions for Results
-# ============================================================================
 
 
 class Metadata(TypedDict):
@@ -587,9 +581,7 @@ class Page(TypedDict, Generic[T]):
     next_offset: Optional[int]
 
 
-# ============================================================================
 # Helper Functions
-# ============================================================================
 
 
 def get_image_size() -> int:
@@ -608,6 +600,29 @@ def get_image_size() -> int:
 def parse_address(addr: str | int) -> int:
     if isinstance(addr, int):
         return addr
+    if isinstance(addr, str):
+        stripped = addr.strip()
+        # Detect stringified JSON array: '["0x40d0e0"]' or "['0x40d0e0']"
+        if stripped.startswith("[") and stripped.endswith("]"):
+            try:
+                parsed = json.loads(stripped)
+                if isinstance(parsed, list) and len(parsed) == 1:
+                    return parse_address(parsed[0])
+            except (json.JSONDecodeError, ValueError):
+                pass
+            raise IDAError(
+                f"Failed to parse address: {addr!r} — "
+                f"this looks like a JSON array string, not a plain address. "
+                f"Pass a single address string like \"0x40d0e0\" instead of a "
+                f"serialized list like '[\"0x40d0e0\"]'."
+            )
+        # Strip extra quotes: '"0x40d0e0"' -> '0x40d0e0'
+        if len(stripped) > 2 and (
+            (stripped.startswith('"') and stripped.endswith('"'))
+            or (stripped.startswith("'") and stripped.endswith("'"))
+        ):
+            stripped = stripped[1:-1].strip()
+            addr = stripped
     try:
         return int(addr, 0)
     except ValueError:
@@ -622,8 +637,7 @@ def parse_address(addr: str | int) -> int:
             pass
         for ch in addr:
             if ch not in "0123456789abcdefABCDEF":
-                raise IDAError(f"Not found: {addr!r}")
-        raise IDAError(f"Failed to parse address (missing 0x prefix): {addr}")
+                raise IDAError(f"Failed to parse address: {addr}")
 
 
 def read_bytes_bss_safe(ea: int, size: int) -> bytes:
@@ -662,10 +676,22 @@ def read_int_bss_safe(ea: int, size: int) -> int:
 
 
 def normalize_list_input(value: list | str) -> list:
-    """Normalize input to list - accepts list or comma-separated string"""
+    """Normalize input to list - accepts list or comma-separated string.
+
+    Also handles stringified JSON arrays like '[\"0x40d0e0\"]' which LLMs
+    sometimes produce instead of native lists.
+    """
     if isinstance(value, list):
         return value
     if isinstance(value, str):
+        stripped = value.strip()
+        if stripped.startswith("["):
+            try:
+                parsed = json.loads(stripped)
+                if isinstance(parsed, list):
+                    return parsed
+            except (json.JSONDecodeError, ValueError):
+                pass
         return [item.strip() for item in value.split(",") if item.strip()]
     return [value]
 
@@ -1370,9 +1396,7 @@ def extract_function_constants(ea: int) -> list[dict]:
     return constants
 
 
-# ============================================================================
 # Large Output Handling
-# ============================================================================
 
 
 def handle_large_output(result: Any, line_threshold: int = 3000) -> Any:
